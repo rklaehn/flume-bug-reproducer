@@ -13,24 +13,24 @@ enum Message {
 }
 
 pub struct LocalPool {
-    threads: Vec<std::thread::JoinHandle<()>>,
     shutdown_sem: Arc<Semaphore>,
     send: flume::Sender<Message>,
+    threads: u32,
 }
 
 impl LocalPool {
     pub fn new() -> Self {
-        let threads = num_cpus::get();
+        let threads = num_cpus::get() as u32;
         let (send, recv) = flume::unbounded::<Message>();
         let shutdown_sem = Arc::new(Semaphore::new(0));
         let handle = tokio::runtime::Handle::current();
-        let handles = (0..threads)
-            .map(|_i| Self::spawn_pool_thread(recv.clone(), shutdown_sem.clone(), handle.clone()))
-            .collect::<Vec<_>>();
+        for _ in 0..threads {
+            Self::spawn_pool_thread(recv.clone(), shutdown_sem.clone(), handle.clone());
+        }
         Self {
-            threads: handles,
             send,
             shutdown_sem,
+            threads,
         }
     }
 
@@ -65,11 +65,10 @@ impl LocalPool {
     }
 
     pub async fn finish(self) {
-        let threads_u32 = self.threads.len() as u32;
-        for _ in 0..threads_u32 {
+        for _ in 0..self.threads {
             self.send.send_async(Message::Finish).await.ok();
         }
-        let _ = self.shutdown_sem.acquire_many(threads_u32).await.unwrap();
+        let _ = self.shutdown_sem.acquire_many(self.threads).await.unwrap();
     }
 
     pub fn spawn_detached<F, Fut>(&self, gen: F)
