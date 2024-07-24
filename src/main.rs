@@ -14,14 +14,14 @@ enum Message {
 
 pub struct LocalPool {
     shutdown_sem: Arc<Semaphore>,
-    send: async_channel::Sender<Message>,
+    send: flume::Sender<Message>,
     threads: u32,
 }
 
 impl LocalPool {
     pub fn new() -> Self {
         let threads = num_cpus::get() as u32;
-        let (send, recv) = async_channel::unbounded::<Message>();
+        let (send, recv) = flume::unbounded::<Message>();
         let shutdown_sem = Arc::new(Semaphore::new(0));
         let handle = tokio::runtime::Handle::current();
         for _ in 0..threads {
@@ -35,7 +35,7 @@ impl LocalPool {
     }
 
     fn spawn_pool_thread(
-        recv: async_channel::Receiver<Message>,
+        recv: flume::Receiver<Message>,
         shutdown_sem: Arc<Semaphore>,
         handle: tokio::runtime::Handle,
     ) -> std::thread::JoinHandle<()> {
@@ -46,7 +46,7 @@ impl LocalPool {
                 loop {
                     tokio::select! {
                         _ = s.join_next(), if !s.is_empty() => {},
-                        msg = recv.recv() => {
+                        msg = recv.recv_async() => {
                             match msg {
                                 Ok(Message::Execute(f)) => {
                                     s.spawn_local((f)());
@@ -66,7 +66,7 @@ impl LocalPool {
 
     pub async fn finish(self) {
         for _ in 0..self.threads {
-            self.send.send(Message::Finish).await.ok();
+            self.send.send_async(Message::Finish).await.ok();
         }
         let _ = self.shutdown_sem.acquire_many(self.threads).await.unwrap();
     }
@@ -77,7 +77,7 @@ impl LocalPool {
         Fut: Future<Output = ()> + 'static,
     {
         let gen: SpawnFn = Box::new(move || Box::pin(gen()));
-        self.send.send_blocking(Message::Execute(gen)).unwrap();
+        self.send.send(Message::Execute(gen)).unwrap();
     }
 }
 
